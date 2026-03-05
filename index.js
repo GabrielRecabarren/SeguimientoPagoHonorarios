@@ -4,11 +4,49 @@ import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken }
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { Search, CheckCircle2, Loader2, AlertCircle, Share2, Users } from 'lucide-react';
 
-// Configuración de Firebase - Utiliza variables de entorno en producción
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+/**
+ * CONFIGURACIÓN DE FIREBASE PARA REPLIT
+ * * En Replit, ve a la pestaña "Secrets" (icono de candado) y añade estas claves:
+ * VITE_FIREBASE_API_KEY
+ * VITE_FIREBASE_AUTH_DOMAIN
+ * VITE_FIREBASE_PROJECT_ID
+ * VITE_FIREBASE_STORAGE_BUCKET
+ * VITE_FIREBASE_MESSAGING_SENDER_ID
+ * VITE_FIREBASE_APP_ID
+ */
+
+const getFirebaseConfig = () => {
+  // Intentamos leer variables de entorno de Vite (Replit)
+  try {
+    // @ts-ignore
+    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FIREBASE_API_KEY) {
+      return {
+        apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+        authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+        projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+        storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+        messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+        appId: import.meta.env.VITE_FIREBASE_APP_ID,
+      };
+    }
+  } catch (e) {
+    // No estamos en un entorno con import.meta.env
+  }
+
+  // Configuración por defecto del entorno de Canvas
+  try {
+    // @ts-ignore
+    return JSON.parse(__firebase_config);
+  } catch (e) {
+    return null;
+  }
+};
+
+const config = getFirebaseConfig();
+const app = config ? initializeApp(config) : null;
+const auth = app ? getAuth(app) : null;
+const db = app ? getFirestore(app) : null;
+// @ts-ignore
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'honorarios-tracker-v1';
 
 const MESES = [
@@ -19,7 +57,7 @@ const MESES = [
 const ESTADOS = [
   { label: 'Pendiente', color: 'bg-gray-100 text-gray-700 border-gray-300' },
   { label: 'Recibido', color: 'bg-blue-100 text-blue-700 border-blue-300' },
-  { label: 'Enviado', color: 'bg-yellow-100 text-yellow-700 border-yellow-300' },
+  { label: 'Enviado', color: 'bg-yellow-100 text-yellow-700 border-blue-300' },
   { label: 'Devuelto', color: 'bg-red-100 text-red-700 border-red-300' },
   { label: 'Subsanado', color: 'bg-purple-100 text-purple-700 border-purple-300' },
   { label: 'Pagado', color: 'bg-green-100 text-green-700 border-green-300' }
@@ -165,23 +203,31 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
+  const [error, setError] = useState(null);
 
-  // Procesar lista de prestadores
   const prestadores = useMemo(() => {
     return [...new Set(PRESTADORES_RAW.split('\n').map(n => n.trim()).filter(n => n && n !== 'ENCARGADO'))];
   }, []);
 
-  // Autenticación inicial
   useEffect(() => {
+    if (!auth) {
+      setError("Base de datos no configurada. Revisa los Secrets en Replit.");
+      setLoading(false);
+      return;
+    }
+
     const initAuth = async () => {
       try {
+        // @ts-ignore
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          // @ts-ignore
           await signInWithCustomToken(auth, __initial_auth_token);
         } else {
           await signInAnonymously(auth);
         }
       } catch (err) {
         console.error("Error de autenticación:", err);
+        setError("Error al conectar con el servicio de datos.");
       }
     };
     initAuth();
@@ -189,11 +235,9 @@ export default function App() {
     return () => unsubscribeAuth();
   }, []);
 
-  // Escucha de datos en tiempo real
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return;
 
-    // Ruta de 6 segmentos para cumplimiento de reglas de Firestore
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'tracking_main', 'current');
     
     const unsubscribeData = onSnapshot(docRef, 
@@ -204,7 +248,8 @@ export default function App() {
         setLoading(false);
       },
       (err) => {
-        console.error("Error en Firestore:", err);
+        console.error("Error de Firestore:", err);
+        setError("No tienes permisos para ver los datos. Verifica la configuración.");
         setLoading(false);
       }
     );
@@ -212,9 +257,8 @@ export default function App() {
     return () => unsubscribeData();
   }, [user]);
 
-  // Actualizar estado de un mes específico
   const updateStatus = async (prestador, mes, estado) => {
-    if (!user) return;
+    if (!user || !db) return;
     
     const newData = {
       ...data,
@@ -224,13 +268,13 @@ export default function App() {
       }
     };
     
-    setData(newData); // Actualización optimista local
-    setSaveStatus('Guardando...');
+    setData(newData);
+    setSaveStatus('Guardando cambios...');
     
     try {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'tracking_main', 'current');
       await setDoc(docRef, newData);
-      setSaveStatus('Cambios guardados');
+      setSaveStatus('¡Guardado con éxito!');
       setTimeout(() => setSaveStatus(''), 2000);
     } catch (err) {
       setSaveStatus('Error al guardar');
@@ -239,10 +283,19 @@ export default function App() {
   };
 
   const handleShare = () => {
-    const url = window.location.href;
-    document.execCommand('copy');
-    setSaveStatus('Enlace copiado al portapapeles');
-    setTimeout(() => setSaveStatus(''), 3000);
+    try {
+      const url = window.location.href;
+      const input = document.createElement('input');
+      input.value = url;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      document.body.removeChild(input);
+      setSaveStatus('Enlace copiado al portapapeles');
+      setTimeout(() => setSaveStatus(''), 3000);
+    } catch (e) {
+      setSaveStatus('Error al copiar el enlace');
+    }
   };
 
   const filteredPrestadores = prestadores.filter(p => 
@@ -263,6 +316,13 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 p-4 md:p-8 font-sans">
       <header className="max-w-7xl mx-auto mb-8">
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3 text-red-700 shadow-sm">
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <p className="text-sm font-medium">{error}</p>
+          </div>
+        )}
+
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
@@ -271,7 +331,7 @@ export default function App() {
             </h1>
             <div className="flex items-center gap-2 mt-1">
               <Users className="w-4 h-4 text-gray-400" />
-              <p className="text-gray-500 text-sm">Uso colaborativo habilitado</p>
+              <p className="text-gray-500 text-sm">Modo colaborativo activado</p>
             </div>
           </div>
           
@@ -297,8 +357,8 @@ export default function App() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input 
                 type="text" 
-                placeholder="Buscar prestador..." 
-                className="pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:outline-none w-full md:w-64"
+                placeholder="Buscar por nombre..." 
+                className="pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:outline-none w-full md:w-64 text-sm"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -336,9 +396,10 @@ export default function App() {
                       return (
                         <td key={mes} className="p-2 text-center">
                           <select 
+                            disabled={!!error}
                             value={currentStatus}
                             onChange={(e) => updateStatus(nombre, mes, e.target.value)}
-                            className={`w-full text-[10px] font-bold py-1.5 px-2 rounded-md border appearance-none text-center cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all ${stateConfig.color}`}
+                            className={`w-full text-[10px] font-bold py-1.5 px-2 rounded-md border appearance-none text-center cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all ${stateConfig.color} ${error ? 'opacity-50 cursor-not-allowed' : ''}`}
                           >
                             {ESTADOS.map(s => (
                               <option key={s.label} value={s.label}>{s.label}</option>
@@ -353,12 +414,6 @@ export default function App() {
             </table>
           </div>
         </div>
-        
-        {filteredPrestadores.length === 0 && (
-          <div className="mt-12 text-center py-12 bg-white rounded-xl border-2 border-dashed border-gray-300">
-            <p className="text-gray-500 font-medium">No se encontraron prestadores con ese nombre.</p>
-          </div>
-        )}
       </main>
       
       <footer className="max-w-7xl mx-auto mt-8 flex flex-wrap gap-4 justify-center items-center opacity-70">
