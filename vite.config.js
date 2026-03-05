@@ -12,6 +12,9 @@ export default defineConfig({
     port: 5000,
     allowedHosts: true,
     strictPort: true,
+    watch: {
+      usePolling: true,
+    },
   },
   build: {
     outDir: 'dist',
